@@ -18,11 +18,11 @@ import io.flutter.plugin.common.MethodChannel.Result;
 
 import android.os.Handler;
 import android.os.Looper;
+import android.os.AsyncTask;
 
 public class FlutterTesseractOcrPlugin implements FlutterPlugin, MethodCallHandler {
   private static final int DEFAULT_PAGE_SEG_MODE = TessBaseAPI.PageSegMode.PSM_AUTO_OSD;
   TessBaseAPI baseApi = null;
-  String lastLanguage = "";
 
   private MethodChannel channel;
   @Override
@@ -51,32 +51,12 @@ public class FlutterTesseractOcrPlugin implements FlutterPlugin, MethodCallHandl
         final String tessDataPath = call.argument("tessData");
         final String imagePath = call.argument("imagePath");
         final Map<String, String> args = call.argument("args");
+        final String[] recognizedText = new String[1];
         String DEFAULT_LANGUAGE = "eng";
         if (call.argument("language") != null) {
           DEFAULT_LANGUAGE = call.argument("language");
         }
-        final String[] recognizedText = new String[1];
-        if(baseApi == null || !lastLanguage.equals(DEFAULT_LANGUAGE)){
-          baseApi = new TessBaseAPI();
-          baseApi.init(tessDataPath, DEFAULT_LANGUAGE);
-          lastLanguage = DEFAULT_LANGUAGE;
-        }
-
-        int psm = DEFAULT_PAGE_SEG_MODE;
-        if(args != null){
-          for (Map.Entry<String, String> entry : args.entrySet()) {
-            if(!entry.getKey().equals("psm")) {
-              baseApi.setVariable(entry.getKey(), entry.getValue());
-            } else {
-              psm = Integer.parseInt(entry.getValue());
-            }
-          }
-        }
-
-        final File tempFile = new File(imagePath);
-        baseApi.setPageSegMode(psm);
-
-        new MyRunnable(baseApi, tempFile, recognizedText, result, call.method.equals("extractHocr")).run();
+        calculateResult(recognizedText, tessDataPath, imagePath, DEFAULT_LANGUAGE, call.method.equals("extractHocr"), result);
         break;
 
       default:
@@ -84,45 +64,51 @@ public class FlutterTesseractOcrPlugin implements FlutterPlugin, MethodCallHandl
     }
   }
 
-
-}
-class MyRunnable implements Runnable {
-  private TessBaseAPI baseApi;
-  private File tempFile;
-  private String[] recognizedText;
-  private Result result;
-  private boolean isHocr;
-
-  public MyRunnable(TessBaseAPI baseApi, File tempFile, String[] recognizedText, Result result, boolean isHocr) {
-    this.baseApi = baseApi;
-    this.tempFile = tempFile;
-    this.recognizedText = recognizedText;
-    this.result = result;
-    this.isHocr = isHocr;
+  private void calculateResult(final String[] recognizedText, final String tessDataPath, final String imagePath, final String language, final Boolean isHocr,
+      final Result result_) {
+    new MyTask(recognizedText, tessDataPath, imagePath, language, isHocr, result_).execute();
   }
 
-  @Override
-  public void run() {
-    try {
-      this.baseApi.setImage(this.tempFile);
-      if (isHocr) {
-        recognizedText[0] = this.baseApi.getHOCRText(0);
-      } else {
-        recognizedText[0] = this.baseApi.getUTF8Text();
-      }
-      this.baseApi.stop();
-      // this.baseApi.recycle();
-    } catch (Exception e) {}
-    this.sendSuccess(recognizedText[0]);
-  }
+  private static class MyTask extends AsyncTask<Void, Void, Void> {
+    String[] recognizedText;
+    String tessDataPath;
+    String imagePath;
+    String language;
+    Boolean isHocr;
+    Result result_;
 
-  public void sendSuccess(String msg) {
-    final String str = msg;
-    final Result res = this.result;
-    new Handler(Looper.getMainLooper()).post(new Runnable() {@Override
-    public void run() {
-      res.success(str);
+    MyTask(String[] recognizedText, String tessDataPath, String imagePath, String language, Boolean isHocr,
+           Result result_) {
+      this.recognizedText = recognizedText;
+      this.tessDataPath = tessDataPath;
+      this.imagePath = imagePath;
+      this.language = language;
+      this.isHocr = isHocr;
+      this.result_ = result_;
     }
-    });
+
+    @Override
+    protected Void doInBackground(Void... params) {
+      final TessBaseAPI baseApi = new TessBaseAPI();
+      baseApi.init(this.tessDataPath, this.language);
+      final File tempFile = new File(this.imagePath);
+      baseApi.setPageSegMode(DEFAULT_PAGE_SEG_MODE);
+      baseApi.setImage(tempFile);
+      if (this.isHocr) {
+        this.recognizedText[0] = baseApi.getHOCRText(0);
+      } else {
+        this.recognizedText[0] = baseApi.getUTF8Text();
+      }
+      baseApi.stop();
+      return null;
+    }
+
+    @Override
+    protected void onPostExecute(Void result) {
+      super.onPostExecute(result);
+      this.result_.success(this.recognizedText[0]);
+    }
   }
+
 }
+
